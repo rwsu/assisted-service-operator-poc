@@ -1,0 +1,295 @@
+---
+# tasks file for AssistedService
+- name: nginx configmap
+  community.kubernetes.k8s:
+    definition:
+      kind: ConfigMap
+      apiVersion: v1
+      metadata:
+        name: ocp-metal-ui
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      data:
+        nginx.conf: |
+          server {
+            listen 8080;
+            server_name _;
+
+            root /app;
+            index index.html;
+
+            location /api {
+                proxy_pass http://127.0.0.1:8090;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection 'upgrade';
+                proxy_set_header Host $host;
+                proxy_cache_bypass $http_upgrade;
+                proxy_connect_timeout 120;
+                proxy_send_timeout 120;
+                proxy_read_timeout 120;
+                send_timeout 120;
+            }
+
+            location / {
+              try_files $uri /index.html;
+            }
+          } 
+
+- name: start assisted-service
+  community.kubernetes.k8s:
+    definition:
+      kind: Deployment
+      apiVersion: apps/v1
+      metadata:
+        name: '{{ ansible_operator_meta.name }}-assistedservice'
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        selector:
+          matchLabels:
+            app: assistedservice
+        template:
+          metadata:
+            labels:
+              app: assistedservice
+          spec:
+            containers:
+            - command:
+              - /opt/bitnami/scripts/nginx/run.sh
+              env:
+              - name: PATH
+                value: /opt/bitnami/common/bin:/opt/bitnami/nginx/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              - name: TERM
+                value: xterm
+              # - name: HOSTNAME
+              #   value: assisted-installer
+              - name: container
+                value: podman
+              - name: OS_NAME
+                value: linux
+              - name: POSTGRESQL_PASSWORD
+                value: admin
+              - name: DB_PORT
+                value: "5432"
+              - name: SERVICE_BASE_URL
+                value: http://127.0.0.1:8090
+              - name: NTP_DEFAULT_SERVER
+              - name: OS_FLAVOUR
+                value: debian-10
+              - name: BITNAMI_APP_NAME
+                value: nginx
+              - name: NGINX_HTTPS_PORT_NUMBER
+              - name: POSTGRESQL_DATABASE
+                value: installer
+              - name: DB_HOST
+                value: 127.0.0.1
+              - name: HOME
+                value: /
+              - name: DUMMY_IGNITION
+                value: "false"
+              - name: POSTGRESQL_USER
+                value: admin
+              - name: OS_ARCH
+                value: amd64
+              - name: BITNAMI_IMAGE_VERSION
+                value: 1.18.0-debian-10-r200
+              - name: NGINX_ENABLE_CUSTOM_PORTS
+                value: "no"
+              - name: NGINX_HTTP_PORT_NUMBER
+              - name: DB_USER
+                value: admin
+              - name: DB_PASS
+                value: admin
+              - name: DEPLOY_TARGET
+                value: onprem
+              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
+                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
+              - name: PUBLIC_CONTAINER_REGISTRIES
+                value: quay.io
+              - name: DB_NAME
+                value: installer
+              image: quay.io/ocpmetal/ocp-metal-ui:latest
+              name: ui
+              ports:
+              - containerPort: 5432
+                hostPort: 5432
+                protocol: TCP
+              - containerPort: 8000
+                hostPort: 8000
+                protocol: TCP
+              - containerPort: 8090
+                hostPort: 8090
+                protocol: TCP
+              - containerPort: 8080
+                hostPort: 8080
+                protocol: TCP
+              resources: {}
+              securityContext:
+                allowPrivilegeEscalation: true
+                capabilities: {}
+                privileged: false
+                readOnlyRootFilesystem: false
+                runAsGroup: 0
+                runAsUser: 1001
+                seLinuxOptions: {}
+              tty: true
+              volumeMounts:
+              # - mountPath: /opt/bitnami/nginx/conf/server_blocks/nginx.conf
+              #   name: nginx-conf-volume
+              - mountPath: /opt/bitnami/nginx/conf/server_blocks/
+                readOnly: true
+                name: nginx-conf
+              workingDir: /app
+            - command:
+              - run-postgresql
+              env:
+              - name: PATH
+                value: /opt/app-root/src/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              - name: TERM
+                value: xterm
+              # - name: HOSTNAME
+              #   value: assisted-installer
+              - name: container
+                value: podman
+              - name: CONTAINER_SCRIPTS_PATH
+                value: /usr/share/container-scripts/postgresql
+              - name: ENABLED_COLLECTIONS
+                value: rh-postgresql12
+              - name: POSTGRESQL_VERSION
+                value: "12"
+              - name: PGUSER
+                value: postgres
+              - name: ENV
+                value: /usr/share/container-scripts/postgresql/scl_enable
+              - name: PLATFORM
+                value: el7
+              - name: PROMPT_COMMAND
+                value: . /usr/share/container-scripts/postgresql/scl_enable
+              - name: POSTGRESQL_USER
+                value: admin
+              - name: DEPLOY_TARGET
+                value: onprem
+              - name: SUMMARY
+                value: PostgreSQL is an advanced Object-Relational database management system
+              - name: DESCRIPTION
+                value: PostgreSQL is an advanced Object-Relational database management system (DBMS). The image contains the client and server programs that you'll need to create, run, maintain and access a PostgreSQL DBMS server.
+              - name: POSTGRESQL_PREV_VERSION
+                value: "10"
+              - name: SERVICE_BASE_URL
+                value: http://127.0.0.1:8090
+              - name: DUMMY_IGNITION
+                value: "false"
+              - name: HOME
+                value: /var/lib/pgsql
+              - name: BASH_ENV
+                value: /usr/share/container-scripts/postgresql/scl_enable
+              - name: DB_HOST
+                value: 127.0.0.1
+              - name: STI_SCRIPTS_URL
+                value: image:///usr/libexec/s2i
+              - name: APP_DATA
+                value: /opt/app-root
+              - name: DB_NAME
+                value: installer
+              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
+                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
+              - name: PUBLIC_CONTAINER_REGISTRIES
+                value: quay.io
+              - name: STI_SCRIPTS_PATH
+                value: /usr/libexec/s2i
+              - name: POSTGRESQL_DATABASE
+                value: installer
+              - name: DB_PASS
+                value: admin
+              - name: NTP_DEFAULT_SERVER
+              - name: DB_PORT
+                value: "5432"
+              - name: DB_USER
+                value: admin
+              - name: APP_ROOT
+                value: /opt/app-root
+              - name: POSTGRESQL_PASSWORD
+                value: admin
+              image: quay.io/ocpmetal/postgresql-12-centos7:latest
+              name: db
+              resources: {}
+              securityContext:
+                allowPrivilegeEscalation: true
+                capabilities: {}
+                privileged: false
+                readOnlyRootFilesystem: false
+                runAsGroup: 26
+                runAsUser: 26
+                seLinuxOptions: {}
+              tty: true
+              workingDir: /opt/app-root/src
+            - command:
+              - /assisted-service
+              env:
+              - name: PATH
+                value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+              - name: TERM
+                value: xterm
+              # - name: HOSTNAME
+              #   value: assisted-installer
+              - name: container
+                value: podman
+              - name: POSTGRESQL_DATABASE
+                value: installer
+              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
+                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
+              - name: PUBLIC_CONTAINER_REGISTRIES
+                value: quay.io
+              - name: DB_PORT
+                value: "5432"
+              - name: DB_USER
+                value: admin
+              - name: DB_PASS
+                value: admin
+              - name: DB_NAME
+                value: installer
+              - name: SERVICE_BASE_URL
+                value: http://127.0.0.1:8090
+              - name: POSTGRESQL_PASSWORD
+                value: admin
+              - name: POSTGRESQL_USER
+                value: admin
+              - name: DB_HOST
+                value: 127.0.0.1
+              - name: DEPLOY_TARGET
+                value: onprem
+              - name: NTP_DEFAULT_SERVER
+              image: quay.io/rwsu/assisted-service:latest
+              name: installer
+              resources: {}
+              securityContext:
+                allowPrivilegeEscalation: true
+                capabilities: {}
+                privileged: false
+                readOnlyRootFilesystem: false
+                seLinuxOptions: {}
+              tty: true
+              # volumeMounts:
+              # - mountPath: /data/livecd.iso
+              #   name: livecd-iso-volume
+              # - mountPath: /data/coreos-installer
+              #   name: coreos-installer-volume
+              workingDir: /
+            volumes:
+            # - hostPath:
+            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/coreos-installer
+            #     type: File
+            #   name: coreos-installer-volume
+            # - hostPath:
+            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/deploy/ui/nginx.conf
+            #     type: File
+            #   name: nginx-conf-volume
+            # - hostPath:
+            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/livecd.iso
+            #     type: File
+            #   name: livecd-iso-volume
+            - name: nginx-conf
+              configMap:
+                name: ocp-metal-ui
+                items:
+                  - key: nginx.conf
+                    path: default.conf

@@ -1,0 +1,8 @@
+
+apiVersion: assisted-service.openshift.io/v1beta1
+kind: AssistedService
+metadata:
+  name: assistedservice-sample
+  namespace: assisted-installer
+spec:
+  size: 3
