@@ -1,5 +1,215 @@
 ---
 # tasks file for AssistedService
+- name: scality secret
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: assisted-installer-s3
+        namespace: '{{ ansible_operator_meta.namespace }}'
+        labels:
+          app: scality
+      type: Opaque
+      stringData:
+        aws_access_key_id: "accessKey1"
+        aws_region: "us-east-1"
+        aws_secret_access_key: "verySecretKey1"
+        bucket: "test"
+        endpoint: "http://cloudserver-front:8000"
+        s3_data_path: /mnt/data
+        s3_metadata_path: /mnt/data
+
+- name: scality PVC
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        labels:
+          app: scality
+        name: scality-pv-claim
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+
+- name: scality deployment
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        labels:
+          app: scality
+        name: scality
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: scality
+        template:
+          metadata:
+            labels:
+              app: scality
+          spec:
+            containers:
+            - env:
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_secret_access_key
+                    name: assisted-installer-s3
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_access_key_id
+                    name: assisted-installer-s3
+              - name: AWS_REGION
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_region
+                    name: assisted-installer-s3
+              - name: BUCKET
+                valueFrom:
+                  secretKeyRef:
+                    key: bucket
+                    name: assisted-installer-s3
+              - name: S3_ENDPOINT_URL
+                valueFrom:
+                  secretKeyRef:
+                    key: endpoint
+                    name: assisted-installer-s3
+              - name: S3DATAPATH
+                valueFrom:
+                  secretKeyRef:
+                    key: s3_data_path
+                    name: assisted-installer-s3
+              - name: S3METADATAPATH
+                valueFrom:
+                  secretKeyRef:
+                    key: s3_metadata_path
+                    name: assisted-installer-s3
+              image: quay.io/ocpmetal/s3server
+              imagePullPolicy: Always
+              name: s3server
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 2000Mi
+                requests:
+                  cpu: 300m
+                  memory: 2000Mi
+              volumeMounts:
+              - mountPath: /mnt/data
+                name: scalityvol
+            volumes:
+            - name: scalityvol
+              persistentVolumeClaim:
+                claimName: scality-pv-claim
+
+- name: scality service
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: scality
+        name: cloudserver-front
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        clusterIP: None
+        ports:
+        - port: 8000
+          protocol: TCP
+          targetPort: 8000
+        selector:
+          app: scality
+      status:
+        loadBalancer: {}
+
+- name: ui service definition
+  community.kubernetes.k8s:
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: ocp-metal-ui
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        type: LoadBalancer
+        ports:
+          - port: 80
+            targetPort: 8080
+            protocol: TCP
+            # nodePort: 31000
+        selector:
+          app: ocp-metal-ui
+
+- name: ui deployment
+  community.kubernetes.k8s:
+    definition:
+      kind: Deployment
+      apiVersion: apps/v1
+      metadata:
+        name: ocp-metal-ui
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: ocp-metal-ui
+        template:
+          metadata:
+            labels:
+              app: ocp-metal-ui
+          spec:
+            containers:
+              - name: ocp-metal-ui
+                image: quay.io/ocpmetal/ocp-metal-ui:latest
+                imagePullPolicy: Always
+                ports:
+                  - containerPort: 80
+                volumeMounts:
+                  - mountPath: /opt/bitnami/nginx/conf/server_blocks/
+                    readOnly: true
+                    name: nginx-conf
+            volumes:
+              - name: nginx-conf
+                configMap:
+                  name: ocp-metal-ui
+                  items:
+                    - key: nginx.conf
+                      path: default.conf
+            restartPolicy: Always
+
+- name: assisted-service service definition
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: assisted-service
+        name: assisted-service
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        ports:
+          - name: assisted-service
+            port: 8090
+            protocol: TCP
+            targetPort: 8090
+        selector:
+          app: assisted-service
+        type: LoadBalancer
+      status:
+        loadBalancer: {}
+
 - name: nginx configmap
   community.kubernetes.k8s:
     definition:
@@ -18,7 +228,7 @@
             index index.html;
 
             location /api {
-                proxy_pass http://127.0.0.1:8090;
+                proxy_pass http://assisted-service.assisted-installer.svc.cluster.local:8090;
                 proxy_http_version 1.1;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection 'upgrade';
@@ -35,261 +245,286 @@
             }
           } 
 
-- name: start assisted-service
+- name: postgres deployment
   community.kubernetes.k8s:
     definition:
-      kind: Deployment
       apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: postgres, namespace: '{{ ansible_operator_meta.namespace }}'}
+      spec:
+        replicas: 1
+        selector:
+          matchLabels: {app: postgres}
+        template:
+          metadata:
+            labels: {app: postgres}
+          spec:
+            containers:
+            - env:
+              - name: POSTGRESQL_DATABASE
+                valueFrom:
+                  secretKeyRef: {key: db.name, name: assisted-installer-rds}
+              - name: POSTGRESQL_USER
+                valueFrom:
+                  secretKeyRef: {key: db.user, name: assisted-installer-rds}
+              - name: POSTGRESQL_PASSWORD
+                valueFrom:
+                  secretKeyRef: {key: db.password, name: assisted-installer-rds}
+              image: quay.io/ocpmetal/postgresql-12-centos7
+              imagePullPolicy: IfNotPresent
+              name: postgres
+              ports:
+              - {containerPort: 5432}
+              resources:
+                limits: {cpu: 200m, memory: 500Mi}
+                requests: {cpu: 100m, memory: 400Mi}
+              volumeMounts:
+              - {mountPath: /var/lib/postgress, name: postgredb}
+            volumes:
+            - name: postgredb
+              persistentVolumeClaim: {claimName: postgres-pv-claim}
+
+- name: postgres service
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
       metadata:
-        name: '{{ ansible_operator_meta.name }}-assistedservice'
+        labels: {app: postgres}
+        name: postgres
         namespace: '{{ ansible_operator_meta.namespace }}'
       spec:
+        ports:
+        - {port: 5432}
+        selector: {app: postgres}
+        type: LoadBalancer
+      status:
+        loadBalancer: {}
+
+- name: postgres PVC
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        labels: {app: postgres}
+        name: postgres-pv-claim
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 10Gi}
+
+- name: postgres secrets
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        labels: {app: postgres}
+        name: assisted-installer-rds
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      stringData: {db.host: postgres, db.name: installer, db.password: admin, db.port: '5432',
+        db.user: admin}
+      type: Opaque
+
+- name: assisted-service sso
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: assisted-installer-sso
+        namespace: '{{ ansible_operator_meta.namespace }}'
+        labels:
+          app: assisted-service
+      type: Opaque
+      stringData:
+        ocm-service.clientId: ""
+        ocm-service.clientSecret: ""
+
+- name: assisted-service service
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        labels:
+          app: assisted-service
+        name: assisted-service
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        ports:
+          - name: assisted-service
+            port: 8090
+            protocol: TCP
+            targetPort: 8090
+        selector:
+          app: assisted-service
+        type: LoadBalancer
+      status:
+        loadBalancer: {}
+
+- name: assisted-service configmap
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      data:
+        ADMIN_USERS: ercohen,lgamliel,mfilanov,ygoldber
+        AGENT_DOCKER_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        API_VIP_CONNECTIVITY_CHECK_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        BASE_DNS_DOMAINS: ''
+        CONNECTIVITY_CHECK_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        CONTROLLER_IMAGE: quay.io/ocpmetal/assisted-installer-controller:latest
+        CREATE_S3_BUCKET: 'true'
+        DHCP_LEASE_ALLOCATOR_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        ENABLE_AUTH: 'False'
+        FREE_ADDRESSES_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        IMAGE_BUILDER: quay.io/ocpmetal/assisted-iso-create:latest
+        INSTALLER_IMAGE: quay.io/ocpmetal/assisted-installer:latest
+        INVENTORY_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        JWKS_URL: https://api.openshift.com/.well-known/jwks.json
+        NAMESPACE: '{{ ansible_operator_meta.namespace }}'
+        NTP_SYNCHRONIZER_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
+        OCM_BASE_URL: https://api-integration.6943.hive-integration.openshiftapps.com
+        OPENSHIFT_INSTALL_RELEASE_IMAGE: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
+        PUBLIC_CONTAINER_REGISTRIES: quay.io
+        SELF_VERSION: quay.io/rwsu/assisted-service:latest
+        SERVICE_BASE_URL: http://192.168.39.152:32301
+        SKIP_CERT_VERIFICATION: 'true'
+      kind: ConfigMap
+      metadata:
+        labels:
+          app: assisted-service
+        name: assisted-service-config
+        namespace: '{{ ansible_operator_meta.namespace }}'
+
+- name: assisted-service deployment
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: assisted-service
+        namespace: '{{ ansible_operator_meta.namespace }}'
+      spec:
+        replicas: 1
         selector:
           matchLabels:
-            app: assistedservice
+            app: assisted-service
         template:
           metadata:
             labels:
-              app: assistedservice
+              app: assisted-service
           spec:
             containers:
-            - command:
-              - /opt/bitnami/scripts/nginx/run.sh
-              env:
-              - name: PATH
-                value: /opt/bitnami/common/bin:/opt/bitnami/nginx/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-              - name: TERM
-                value: xterm
-              # - name: HOSTNAME
-              #   value: assisted-installer
-              - name: container
-                value: podman
-              - name: OS_NAME
-                value: linux
-              - name: POSTGRESQL_PASSWORD
-                value: admin
-              - name: DB_PORT
-                value: "5432"
-              - name: SERVICE_BASE_URL
-                value: http://127.0.0.1:8090
-              - name: NTP_DEFAULT_SERVER
-              - name: OS_FLAVOUR
-                value: debian-10
-              - name: BITNAMI_APP_NAME
-                value: nginx
-              - name: NGINX_HTTPS_PORT_NUMBER
-              - name: POSTGRESQL_DATABASE
-                value: installer
+            - env:
               - name: DB_HOST
-                value: 127.0.0.1
-              - name: HOME
-                value: /
-              - name: DUMMY_IGNITION
-                value: "false"
-              - name: POSTGRESQL_USER
-                value: admin
-              - name: OS_ARCH
-                value: amd64
-              - name: BITNAMI_IMAGE_VERSION
-                value: 1.18.0-debian-10-r200
-              - name: NGINX_ENABLE_CUSTOM_PORTS
-                value: "no"
-              - name: NGINX_HTTP_PORT_NUMBER
-              - name: DB_USER
-                value: admin
-              - name: DB_PASS
-                value: admin
-              - name: DEPLOY_TARGET
-                value: onprem
-              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
-                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
-              - name: PUBLIC_CONTAINER_REGISTRIES
-                value: quay.io
+                valueFrom:
+                  secretKeyRef:
+                    key: db.host
+                    name: assisted-installer-rds
               - name: DB_NAME
-                value: installer
-              image: quay.io/ocpmetal/ocp-metal-ui:latest
-              name: ui
-              ports:
-              - containerPort: 5432
-                hostPort: 5432
-                protocol: TCP
-              - containerPort: 8000
-                hostPort: 8000
-                protocol: TCP
-              - containerPort: 8090
-                hostPort: 8090
-                protocol: TCP
-              - containerPort: 8080
-                hostPort: 8080
-                protocol: TCP
-              resources: {}
-              securityContext:
-                allowPrivilegeEscalation: true
-                capabilities: {}
-                privileged: false
-                readOnlyRootFilesystem: false
-                runAsGroup: 0
-                runAsUser: 1001
-                seLinuxOptions: {}
-              tty: true
-              volumeMounts:
-              # - mountPath: /opt/bitnami/nginx/conf/server_blocks/nginx.conf
-              #   name: nginx-conf-volume
-              - mountPath: /opt/bitnami/nginx/conf/server_blocks/
-                readOnly: true
-                name: nginx-conf
-              workingDir: /app
-            - command:
-              - run-postgresql
-              env:
-              - name: PATH
-                value: /opt/app-root/src/bin:/opt/app-root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-              - name: TERM
-                value: xterm
-              # - name: HOSTNAME
-              #   value: assisted-installer
-              - name: container
-                value: podman
-              - name: CONTAINER_SCRIPTS_PATH
-                value: /usr/share/container-scripts/postgresql
-              - name: ENABLED_COLLECTIONS
-                value: rh-postgresql12
-              - name: POSTGRESQL_VERSION
-                value: "12"
-              - name: PGUSER
-                value: postgres
-              - name: ENV
-                value: /usr/share/container-scripts/postgresql/scl_enable
-              - name: PLATFORM
-                value: el7
-              - name: PROMPT_COMMAND
-                value: . /usr/share/container-scripts/postgresql/scl_enable
-              - name: POSTGRESQL_USER
-                value: admin
-              - name: DEPLOY_TARGET
-                value: onprem
-              - name: SUMMARY
-                value: PostgreSQL is an advanced Object-Relational database management system
-              - name: DESCRIPTION
-                value: PostgreSQL is an advanced Object-Relational database management system (DBMS). The image contains the client and server programs that you'll need to create, run, maintain and access a PostgreSQL DBMS server.
-              - name: POSTGRESQL_PREV_VERSION
-                value: "10"
-              - name: SERVICE_BASE_URL
-                value: http://127.0.0.1:8090
-              - name: DUMMY_IGNITION
-                value: "false"
-              - name: HOME
-                value: /var/lib/pgsql
-              - name: BASH_ENV
-                value: /usr/share/container-scripts/postgresql/scl_enable
-              - name: DB_HOST
-                value: 127.0.0.1
-              - name: STI_SCRIPTS_URL
-                value: image:///usr/libexec/s2i
-              - name: APP_DATA
-                value: /opt/app-root
-              - name: DB_NAME
-                value: installer
-              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
-                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
-              - name: PUBLIC_CONTAINER_REGISTRIES
-                value: quay.io
-              - name: STI_SCRIPTS_PATH
-                value: /usr/libexec/s2i
-              - name: POSTGRESQL_DATABASE
-                value: installer
+                valueFrom:
+                  secretKeyRef:
+                    key: db.name
+                    name: assisted-installer-rds
               - name: DB_PASS
-                value: admin
-              - name: NTP_DEFAULT_SERVER
+                valueFrom:
+                  secretKeyRef:
+                    key: db.password
+                    name: assisted-installer-rds
               - name: DB_PORT
-                value: "5432"
+                valueFrom:
+                  secretKeyRef:
+                    key: db.port
+                    name: assisted-installer-rds
               - name: DB_USER
-                value: admin
-              - name: APP_ROOT
-                value: /opt/app-root
-              - name: POSTGRESQL_PASSWORD
-                value: admin
-              image: quay.io/ocpmetal/postgresql-12-centos7:latest
-              name: db
-              resources: {}
-              securityContext:
-                allowPrivilegeEscalation: true
-                capabilities: {}
-                privileged: false
-                readOnlyRootFilesystem: false
-                runAsGroup: 26
-                runAsUser: 26
-                seLinuxOptions: {}
-              tty: true
-              workingDir: /opt/app-root/src
-            - command:
-              - /assisted-service
-              env:
-              - name: PATH
-                value: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-              - name: TERM
-                value: xterm
-              # - name: HOSTNAME
-              #   value: assisted-installer
-              - name: container
-                value: podman
-              - name: POSTGRESQL_DATABASE
-                value: installer
-              - name: OPENSHIFT_INSTALL_RELEASE_IMAGE
-                value: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
-              - name: PUBLIC_CONTAINER_REGISTRIES
-                value: quay.io
-              - name: DB_PORT
-                value: "5432"
-              - name: DB_USER
-                value: admin
-              - name: DB_PASS
-                value: admin
-              - name: DB_NAME
-                value: installer
-              - name: SERVICE_BASE_URL
-                value: http://127.0.0.1:8090
-              - name: POSTGRESQL_PASSWORD
-                value: admin
-              - name: POSTGRESQL_USER
-                value: admin
-              - name: DB_HOST
-                value: 127.0.0.1
-              - name: DEPLOY_TARGET
-                value: onprem
-              - name: NTP_DEFAULT_SERVER
+                valueFrom:
+                  secretKeyRef:
+                    key: db.user
+                    name: assisted-installer-rds
+              - name: OCM_SERVICE_CLIENT_ID
+                valueFrom:
+                  secretKeyRef:
+                    key: ocm-service.clientId
+                    name: assisted-installer-sso
+              - name: OCM_SERVICE_CLIENT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    key: ocm-service.clientSecret
+                    name: assisted-installer-sso
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_secret_access_key
+                    name: assisted-installer-s3
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_access_key_id
+                    name: assisted-installer-s3
+              - name: S3_REGION
+                valueFrom:
+                  secretKeyRef:
+                    key: aws_region
+                    name: assisted-installer-s3
+              - name: S3_BUCKET
+                valueFrom:
+                  secretKeyRef:
+                    key: bucket
+                    name: assisted-installer-s3
+              - name: S3_ENDPOINT_URL
+                valueFrom:
+                  secretKeyRef:
+                    key: endpoint
+                    name: assisted-installer-s3
+              - name: S3_USE_SSL
+                value: 'false'
+              - name: LOG_LEVEL
+                value: info
+              - name: LOG_FORMAT
+                value: text
+              - name: INSTALL_RH_CA
+                value: 'false'
+              - name: REGISTRY_CREDS
+                value: ''
+              - name: NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: AWS_SHARED_CREDENTIALS_FILE
+                value: /etc/.aws/credentials
+              envFrom:
+              - configMapRef:
+                  name: assisted-service-config
               image: quay.io/rwsu/assisted-service:latest
-              name: installer
-              resources: {}
-              securityContext:
-                allowPrivilegeEscalation: true
-                capabilities: {}
-                privileged: false
-                readOnlyRootFilesystem: false
-                seLinuxOptions: {}
-              tty: true
-              # volumeMounts:
-              # - mountPath: /data/livecd.iso
-              #   name: livecd-iso-volume
-              # - mountPath: /data/coreos-installer
-              #   name: coreos-installer-volume
-              workingDir: /
+              imagePullPolicy: Always
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8090
+                initialDelaySeconds: 30
+              name: assisted-service
+              ports:
+              - containerPort: 8090
+              readinessProbe:
+                httpGet:
+                  path: /ready
+                  port: 8090
+              resources:
+                limits:
+                  cpu: 500m
+                  memory: 2000Mi
+                requests:
+                  cpu: 300m
+                  memory: 400Mi
+              volumeMounts:
+              - mountPath: /etc/.aws
+                name: route53-creds
+                readOnly: true
             volumes:
-            # - hostPath:
-            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/coreos-installer
-            #     type: File
-            #   name: coreos-installer-volume
-            # - hostPath:
-            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/deploy/ui/nginx.conf
-            #     type: File
-            #   name: nginx-conf-volume
-            # - hostPath:
-            #     path: /home/rwsu/go/src/github.com/openshift/assisted-service/livecd.iso
-            #     type: File
-            #   name: livecd-iso-volume
-            - name: nginx-conf
-              configMap:
-                name: ocp-metal-ui
-                items:
-                  - key: nginx.conf
-                    path: default.conf
+            - name: route53-creds
+              secret:
+                optional: true
+                secretName: route53-creds
