@@ -389,7 +389,7 @@
         OCM_BASE_URL: https://api-integration.6943.hive-integration.openshiftapps.com
         OPENSHIFT_INSTALL_RELEASE_IMAGE: quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64
         PUBLIC_CONTAINER_REGISTRIES: quay.io
-        SELF_VERSION: quay.io/rwsu/assisted-service:latest
+        SELF_VERSION: quay.io/ocpmetal/assisted-service:latest
         SERVICE_BASE_URL: http://192.168.39.152:32301
         SKIP_CERT_VERIFICATION: 'true'
       kind: ConfigMap
@@ -495,10 +495,12 @@
                     fieldPath: metadata.namespace
               - name: AWS_SHARED_CREDENTIALS_FILE
                 value: /etc/.aws/credentials
+              - name: DEPLOY_TARGET
+                value: ocp
               envFrom:
               - configMapRef:
                   name: assisted-service-config
-              image: quay.io/rwsu/assisted-service:latest
+              image: quay.io/ocpmetal/assisted-service:latest
               imagePullPolicy: Always
               livenessProbe:
                 httpGet:
@@ -523,8 +525,23 @@
               - mountPath: /etc/.aws
                 name: route53-creds
                 readOnly: true
+              - mountPath: /data
+                name: iso
+            initContainers:
+            - args:
+              - cp -r /data/* /iso-data
+              command:
+              - bash
+              - -c
+              image: quay.io/ocpmetal/assisted-iso-create:latest
+              name: assisted-iso-create
+              volumeMounts:
+              - mountPath: /iso-data
+                name: iso
             volumes:
             - name: route53-creds
               secret:
                 optional: true
                 secretName: route53-creds
+            - emptyDir: {}
+              name: iso
