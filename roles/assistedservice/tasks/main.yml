@@ -343,6 +343,26 @@
         ocm-service.clientId: ""
         ocm-service.clientSecret: ""
 
+- name: assisted-service sso
+  community.kubernetes.k8s:
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: assisted-installer-public-s3
+        namespace: '{{ ansible_operator_meta.namespace }}'
+        labels:
+          app: scality
+      type: Opaque
+      stringData:
+        aws_access_key_id: "accessKey1"
+        aws_region: "us-east-1"
+        aws_secret_access_key: "verySecretKey1"
+        bucket: "pub-test"
+        endpoint: "http://cloudserver-front:8000"
+        s3_data_path: /mnt/data
+        s3_metadata_path: /mnt/data
+
 - name: assisted-service service
   community.kubernetes.k8s:
     definition:
@@ -379,6 +399,7 @@
         CREATE_S3_BUCKET: 'true'
         DHCP_LEASE_ALLOCATOR_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
         ENABLE_AUTH: 'False'
+        FIO_PERF_CHECK_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
         FREE_ADDRESSES_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
         INSTALLER_IMAGE: quay.io/ocpmetal/assisted-installer:latest
         INVENTORY_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
@@ -386,7 +407,8 @@
         NAMESPACE: '{{ ansible_operator_meta.namespace }}'
         NTP_SYNCHRONIZER_IMAGE: quay.io/ocpmetal/assisted-installer-agent:latest
         OCM_BASE_URL: https://api-integration.6943.hive-integration.openshiftapps.com
-        OPENSHIFT_VERSIONS: '{"4.6":{"release_image":"quay.io/openshift-release-dev/ocp-release:4.6.4-x86_64"},"4.7":{"release_image":"quay.io/openshift-release-dev/ocp-release@sha256:2419f9cd3ea9bd114764855653012e305ade2527210d332bfdd6dbdae538bd66"}}'
+        OPENSHIFT_INSTALL_RELEASE_IMAGE: ''
+        OPENSHIFT_VERSIONS: '{"4.6":{"display_name":"4.6.8","release_image":"quay.io/openshift-release-dev/ocp-release:4.6.8-x86_64","rhcos_image":"https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.6/4.6.8/rhcos-4.6.8-x86_64-live.x86_64.iso","support_level":"production"},"4.7":{"display_name":"4.7-pre-release","release_image":"quay.io/openshift-release-dev/ocp-release@sha256:2419f9cd3ea9bd114764855653012e305ade2527210d332bfdd6dbdae538bd66","rhcos_image":"https://mirror.openshift.com/pub/openshift-v4/dependencies/rhcos/4.6/4.6.8/rhcos-4.6.8-x86_64-live.x86_64.iso","support_level":"beta"}}'
         PUBLIC_CONTAINER_REGISTRIES: quay.io
         SELF_VERSION: quay.io/ocpmetal/assisted-service:latest
         SERVICE_BASE_URL: http://assisted-service-assisted-installer.apps.ostest.test.metalkube.org
@@ -418,102 +440,7 @@
               app: assisted-service
           spec:
             containers:
-            - env:
-              - name: DB_HOST
-                valueFrom:
-                  secretKeyRef:
-                    key: db.host
-                    name: assisted-installer-rds
-              - name: DB_NAME
-                valueFrom:
-                  secretKeyRef:
-                    key: db.name
-                    name: assisted-installer-rds
-              - name: DB_PASS
-                valueFrom:
-                  secretKeyRef:
-                    key: db.password
-                    name: assisted-installer-rds
-              - name: DB_PORT
-                valueFrom:
-                  secretKeyRef:
-                    key: db.port
-                    name: assisted-installer-rds
-              - name: DB_USER
-                valueFrom:
-                  secretKeyRef:
-                    key: db.user
-                    name: assisted-installer-rds
-              - name: OCM_SERVICE_CLIENT_ID
-                valueFrom:
-                  secretKeyRef:
-                    key: ocm-service.clientId
-                    name: assisted-installer-sso
-              - name: OCM_SERVICE_CLIENT_SECRET
-                valueFrom:
-                  secretKeyRef:
-                    key: ocm-service.clientSecret
-                    name: assisted-installer-sso
-              - name: AWS_SECRET_ACCESS_KEY
-                valueFrom:
-                  secretKeyRef:
-                    key: aws_secret_access_key
-                    name: assisted-installer-s3
-              - name: AWS_ACCESS_KEY_ID
-                valueFrom:
-                  secretKeyRef:
-                    key: aws_access_key_id
-                    name: assisted-installer-s3
-              - name: S3_REGION
-                valueFrom:
-                  secretKeyRef:
-                    key: aws_region
-                    name: assisted-installer-s3
-              - name: S3_BUCKET
-                valueFrom:
-                  secretKeyRef:
-                    key: bucket
-                    name: assisted-installer-s3
-              - name: S3_ENDPOINT_URL
-                valueFrom:
-                  secretKeyRef:
-                    key: endpoint
-                    name: assisted-installer-s3
-              - name: S3_USE_SSL
-                value: 'false'
-              - name: LOG_LEVEL
-                value: info
-              - name: LOG_FORMAT
-                value: text
-              - name: INSTALL_RH_CA
-                value: 'false'
-              - name: REGISTRY_CREDS
-                value: ''
-              - name: NAMESPACE
-                valueFrom:
-                  fieldRef:
-                    fieldPath: metadata.namespace
-              - name: AWS_SHARED_CREDENTIALS_FILE
-                value: /etc/.aws/credentials
-              - name: DEPLOY_TARGET
-                value: ocp
-              envFrom:
-              - configMapRef:
-                  name: assisted-service-config
-              image: quay.io/ocpmetal/assisted-service:latest
-              imagePullPolicy: Always
-              livenessProbe:
-                httpGet:
-                  path: /health
-                  port: 8090
-                initialDelaySeconds: 30
-              name: assisted-service
-              ports:
-              - containerPort: 8090
-              readinessProbe:
-                httpGet:
-                  path: /ready
-                  port: 8090
+            - name: assisted-service
               resources:
                 limits:
                   cpu: 500m
@@ -521,27 +448,121 @@
                 requests:
                   cpu: 300m
                   memory: 400Mi
-              volumeMounts:
-              - mountPath: /etc/.aws
-                name: route53-creds
-                readOnly: true
-              - mountPath: /data
-                name: iso
-            initContainers:
-            - args:
-              - cp -r /data/* /iso-data
-              command:
-              - bash
-              - -c
-              image: quay.io/ocpmetal/assisted-iso-create:latest
-              name: assisted-iso-create
-              volumeMounts:
-              - mountPath: /iso-data
-                name: iso
-            volumes:
-            - name: route53-creds
-              secret:
-                optional: true
-                secretName: route53-creds
-            - emptyDir: {}
-              name: iso
+              image: quay.io/ocpmetal/assisted-service:latest
+              imagePullPolicy: Always
+              ports:
+                - containerPort: 8090
+              livenessProbe:
+                httpGet:
+                  path: /health
+                  port: 8090
+                initialDelaySeconds: 30
+              readinessProbe:
+                httpGet:
+                  path: /ready
+                  port: 8090
+              envFrom:
+                - configMapRef:
+                    name: assisted-service-config
+              env:
+                - name: DB_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: assisted-installer-rds
+                      key: db.host
+                - name: DB_NAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: assisted-installer-rds
+                      key: db.name
+                - name: DB_PASS
+                  valueFrom:
+                    secretKeyRef:
+                      name: assisted-installer-rds
+                      key: db.password
+                - name: DB_PORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: assisted-installer-rds
+                      key: db.port
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: assisted-installer-rds
+                      key: db.user
+                - name: OCM_SERVICE_CLIENT_ID
+                  valueFrom:
+                    secretKeyRef:
+                      key: ocm-service.clientId
+                      name: assisted-installer-sso
+                - name: OCM_SERVICE_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      key: ocm-service.clientSecret
+                      name: assisted-installer-sso
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_secret_access_key
+                      name: assisted-installer-s3
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_access_key_id
+                      name: assisted-installer-s3
+                - name: S3_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_region
+                      name: assisted-installer-s3
+                - name: S3_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      key: bucket
+                      name: assisted-installer-s3
+                - name: S3_ENDPOINT_URL
+                  valueFrom:
+                    secretKeyRef:
+                      key: endpoint
+                      name: assisted-installer-s3
+                - name: AWS_SECRET_ACCESS_KEY_PUBLIC
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_secret_access_key
+                      name: assisted-installer-public-s3
+                - name: AWS_ACCESS_KEY_ID_PUBLIC
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_access_key_id
+                      name: assisted-installer-public-s3
+                - name: S3_REGION_PUBLIC
+                  valueFrom:
+                    secretKeyRef:
+                      key: aws_region
+                      name: assisted-installer-public-s3
+                - name: S3_BUCKET_PUBLIC
+                  valueFrom:
+                    secretKeyRef:
+                      key: bucket
+                      name: assisted-installer-public-s3
+                - name: S3_ENDPOINT_URL_PUBLIC
+                  valueFrom:
+                    secretKeyRef:
+                      key: endpoint
+                      name: assisted-installer-public-s3
+                - name: S3_USE_SSL
+                  value: "false"
+                - name: LOG_LEVEL
+                  value: "info"
+                - name: LOG_FORMAT
+                  value: "text"
+                - name: INSTALL_RH_CA
+                  value: "false"
+                - name: REGISTRY_CREDS
+                  value: ""
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: AWS_SHARED_CREDENTIALS_FILE
+                  value: /etc/.aws/credentials
